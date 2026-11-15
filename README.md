@@ -30,3 +30,7 @@ claude plugin install token-grid --marketplace ram-govi/token-grid
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `ram-govi/token-grid`, then Add plugin.
 
 Answer `y` to add the marketplace, then pick a scope.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
