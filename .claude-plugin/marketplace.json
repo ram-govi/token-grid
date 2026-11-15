@@ -1,0 +1,5 @@
+{
+  "name": "token-grid",
+  "owner": { "name": "ram-govi" },
+  "plugins": [{ "name": "token-grid", "source": "./" }]
+}
