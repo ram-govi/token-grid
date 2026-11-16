@@ -27,6 +27,18 @@ const colorFor = (pct: number): string =>
   pct < 50 ? '#5fbf8f' : pct < 75 ? '#8f8cf4' : pct < 90 ? '#e0a040' : '#e05a4f'
 const termColorFor = (pct: number): string => (pct < 50 ? 'green' : pct < 75 ? 'cyan' : pct < 90 ? 'yellow' : 'red')
 
+// Last req: reading (input, cache) in blue, writing (output) in orange.
+const READ = '#5b9cf0'
+const WRITE = '#e8913a'
+
+// Relative price per token, the same ratio on every Claude model: input 1,
+// cache read 0.1, cache write 1.25, output 5. Only the ratio matters here.
+export const writeShareOf = (u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number | undefined => {
+  const write = 5 * u.output_tokens
+  const read = u.input_tokens + 0.1 * u.cache_read_input_tokens + 1.25 * u.cache_creation_input_tokens
+  return write + read > 0 ? write / (write + read) : undefined
+}
+
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h limit', seven_day: '7d limit', spend_limit: 'Spend' }
 
 // Deterministic noise so the dither does not shimmer between redraws.
@@ -50,7 +62,9 @@ export const resetIn = (iso: string | undefined, at: number): string => {
   return h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h ? `${h}h ${m}m` : `${m}m`
 }
 
-type Line = { label: string; pct: number; value: string }
+type Part = { text: string; color?: string }
+// split: the share of the filled bar drawn in WRITE, the rest in READ.
+type Line = { label: string; pct: number; value: string; parts?: Part[]; split?: number }
 
 export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Line[] => {
   const lines: Line[] = [
@@ -61,10 +75,22 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Lin
     },
   ]
   if (lt) {
-    const parts = [`${lt.added < 0 ? '−' : '+'}${short(Math.abs(lt.added))} ctx · out ${short(lt.output)}`]
-    if (lt.usd !== undefined) parts.push(`$${lt.usd.toFixed(2)}`)
-    if (lt.share !== undefined) parts.push(`${Math.round(lt.share)}%`)
-    lines.push({ label: 'Last req', pct: lt.share ?? 0, value: parts.join('  ') })
+    const tail = [lt.usd !== undefined ? `$${lt.usd.toFixed(2)}` : '', lt.share !== undefined ? `${Math.round(lt.share)}%` : '']
+      .filter(Boolean)
+      .join('  ')
+    const parts: Part[] = [
+      { text: `${lt.added < 0 ? '−' : '+'}${short(Math.abs(lt.added))} ctx`, color: READ },
+      { text: ' · ' },
+      { text: `out ${short(lt.output)}`, color: WRITE },
+      ...(tail ? [{ text: `  ${tail}` }] : []),
+    ]
+    lines.push({
+      label: 'Last req',
+      pct: lt.share ?? 0,
+      value: parts.map(p => p.text).join(''),
+      parts,
+      split: lt.writeShare,
+    })
   }
   for (const l of r.limits) {
     const reset = resetIn(l.resetsAt, at)
@@ -79,16 +105,19 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Lin
 
 const barSvg = (line: Line, y: number, barW: number, seed: number): string => {
   const color = colorFor(line.pct)
-  const fillW = Math.round((barW * Math.max(0, Math.min(100, line.pct))) / 100)
+  const raw = Math.round((barW * Math.max(0, Math.min(100, line.pct))) / 100)
+  const fillW = line.split !== undefined && line.pct > 0 ? Math.max(raw, 4 * CELL) : raw
   const cols = Math.floor(fillW / CELL)
   const rows = Math.floor(BAR_H / CELL)
+  const readCols = line.split === undefined ? cols : Math.round(cols * (1 - line.split))
   const dots: string[] = []
+  const writeDots: string[] = []
   // Sparse at the start, dense toward the head, as savvy-progress draws it.
   for (let c = 0; c < cols; c++) {
     const density = 0.35 + 0.6 * Math.pow(c / Math.max(1, cols), 1.2)
     for (let r = 0; r < rows; r++) {
       if (noise(c + seed, r) < density) {
-        dots.push(`<rect class="t${Math.floor(noise(r, c + seed) * 4)}" x="${c * CELL + 1}" y="${r * CELL + 1}" width="2" height="2"/>`)
+        ;(c < readCols ? dots : writeDots).push(`<rect class="t${Math.floor(noise(r, c + seed) * 4)}" x="${c * CELL + 1}" y="${r * CELL + 1}" width="2" height="2"/>`)
       }
     }
   }
@@ -102,9 +131,9 @@ const barSvg = (line: Line, y: number, barW: number, seed: number): string => {
   return `<text class="m" x="0" y="${y + LINE_H / 2 + 4}" font-family="${FONT}" font-size="12" font-weight="500">${xml(line.label)}</text>
 <g transform="translate(${LABEL_W},${by})">
 <rect class="k" width="${barW}" height="${BAR_H}" rx="${BAR_H / 2}"/>
-<g clip-path="url(#c${seed})"><g fill="${color}">${dots.join('')}</g><g class="tk">${ticks}</g></g>
+<g clip-path="url(#c${seed})"><g fill="${line.split === undefined ? color : READ}">${dots.join('')}</g><g fill="${WRITE}">${writeDots.join('')}</g><g class="tk">${ticks}</g></g>
 </g>
-<text class="t" x="${LABEL_W + barW + VALUE_W}" y="${y + LINE_H / 2 + 4}" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${xml(line.value)}</text>`
+<text class="t" x="${LABEL_W + barW + VALUE_W}" y="${y + LINE_H / 2 + 4}" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${line.parts ? line.parts.map(p => (p.color ? `<tspan fill="${p.color}">${xml(p.text)}</tspan>` : `<tspan xml:space="preserve">${xml(p.text)}</tspan>`)).join('') : xml(line.value)}</text>`
 }
 
 export const gridSvg = (lines: Line[], W: number): string => {
@@ -127,8 +156,9 @@ ${lines.map((l, i) => barSvg(l, i * LINE_H, barW, i * 17)).join('\n')}
 </svg>`
 }
 
+const filledOf = (pct: number, width: number): number => Math.round((width * Math.max(0, Math.min(100, pct))) / 100)
 const blocks = (pct: number, width: number): string => {
-  const filled = Math.round((width * Math.max(0, Math.min(100, pct))) / 100)
+  const filled = filledOf(pct, width)
   return '⣿'.repeat(filled) + '⣀'.repeat(Math.max(0, width - filled))
 }
 
@@ -197,6 +227,7 @@ export const register: Register = on => {
       output: u.output_tokens,
       usd,
       share,
+      writeShare: writeShareOf(u),
     }
     await update($, last, () => lt)
     return result
@@ -227,8 +258,32 @@ export const register: Register = on => {
             <Box width={9} flexShrink={0}>
               <Text dimColor>{l.label}</Text>
             </Box>
-            <Text color={termColorFor(l.pct)}>{blocks(l.pct, barW)}</Text>
-            <Text>{l.value}</Text>
+            {l.split === undefined ? (
+              <Text color={termColorFor(l.pct)}>{blocks(l.pct, barW)}</Text>
+            ) : (
+              (() => {
+                const filled = l.pct > 0 ? Math.max(2, filledOf(l.pct, barW)) : 0
+                const write = Math.round(filled * (l.split ?? 0))
+                return (
+                  <Text>
+                    <Text color={READ}>{'⣿'.repeat(filled - write)}</Text>
+                    <Text color={WRITE}>{'⣿'.repeat(write)}</Text>
+                    <Text dimColor>{'⣀'.repeat(Math.max(0, barW - filled))}</Text>
+                  </Text>
+                )
+              })()
+            )}
+            {l.parts ? (
+              <Text>
+                {l.parts.map((p, i) => (
+                  <Text key={i} color={p.color}>
+                    {p.text}
+                  </Text>
+                ))}
+              </Text>
+            ) : (
+              <Text>{l.value}</Text>
+            )}
           </Box>
         ))}
       </Box>

@@ -16,6 +16,8 @@ export type LastTurn = {
   usd?: number
   /** Share of the session's cost, 0-100. */
   share?: number
+  /** Estimated part of the request's cost spent writing (output), 0-1; the rest is reading. */
+  writeShare?: number
 }
 
 declare module 'claude-code' {

@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { writeShareOf } from '../hooks/register'
+
 const BAND = {
   plugin: 'token-grid',
   component: 'AbovePrompt',
@@ -34,14 +36,25 @@ test('the band shows context and rate limits, on terminal and desktop', async ($
 
 test('the last request shows its tokens, cost and share', async ($, on) => {
   mock.clock(on)
-  const LAST = { added: 12_300, input: 412_000, output: 3_200, usd: 0.42, share: 13 }
+  const LAST = { added: 12_300, input: 412_000, output: 3_200, usd: 0.42, share: 13, writeShare: 0.3 }
   on('state.get', (_$, e) => ({
     value: { value: (e as { key: string }).key === 'last' ? LAST : READING, version: 1 },
   }))
   const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await term.find({ type: 'Text', text: 'Last req' })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: /\+12\.3k ctx · out 3\.2k {2}\$0\.42 {2}13%/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: '+12.3k ctx' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: 'out 3.2k' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /\$0\.42 {2}13%/ })).toBeDefined()
   await term.unmount()
+
+  const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await desk.find({ type: 'Svg' })).toBeDefined()
+  await desk.unmount()
+})
+
+test('write share weighs output at 5x input and cache reads at a tenth', () => {
+  expect(writeShareOf({ input_tokens: 0, output_tokens: 1_000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 0 })).toBe(0.5)
+  expect(writeShareOf({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })).toBeUndefined()
 })
 
 test('no reading, no row', async ($, on) => {
