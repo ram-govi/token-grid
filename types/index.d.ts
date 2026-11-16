@@ -8,6 +8,9 @@ export type Reading = {
 }
 /** The last main-loop request: tokens its API calls read and wrote, and what it cost. */
 export type LastTurn = {
+  /** Tokens the request added to the context window (end minus start; negative after a compact). */
+  added: number
+  /** Input tokens summed over every API call of the request, cache reads included. */
   input: number
   output: number
   usd?: number
@@ -17,6 +20,6 @@ export type LastTurn = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-grid': { reading: Reading | null; last: LastTurn | null; startUsd: number | null }
+    'token-grid': { reading: Reading | null; last: LastTurn | null; startUsd: number | null; startTokens: number | null }
   }
 }

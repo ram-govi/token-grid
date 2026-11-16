@@ -34,13 +34,13 @@ test('the band shows context and rate limits, on terminal and desktop', async ($
 
 test('the last request shows its tokens, cost and share', async ($, on) => {
   mock.clock(on)
-  const LAST = { input: 412_000, output: 3_200, usd: 0.42, share: 13 }
+  const LAST = { added: 12_300, input: 412_000, output: 3_200, usd: 0.42, share: 13 }
   on('state.get', (_$, e) => ({
     value: { value: (e as { key: string }).key === 'last' ? LAST : READING, version: 1 },
   }))
   const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await term.find({ type: 'Text', text: 'Last req' })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: /in 412k · out 3\.2k {2}\$0\.42 {2}13%/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /\+12\.3k ctx · out 3\.2k {2}\$0\.42 {2}13%/ })).toBeDefined()
   await term.unmount()
 })
 

@@ -13,6 +13,7 @@ import type { LastTurn, Limit, Reading } from '../types'
 const reading = atom({ plugin: 'token-grid', key: 'reading' } as const, null)
 const last = atom({ plugin: 'token-grid', key: 'last' } as const, null)
 const startUsd = atom({ plugin: 'token-grid', key: 'startUsd' } as const, null)
+const startTokens = atom({ plugin: 'token-grid', key: 'startTokens' } as const, null)
 
 const LINE_H = 20
 const BAR_H = 12
@@ -60,7 +61,7 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Lin
     },
   ]
   if (lt) {
-    const parts = [`in ${short(lt.input)} · out ${short(lt.output)}`]
+    const parts = [`${lt.added < 0 ? '−' : '+'}${short(Math.abs(lt.added))} ctx · out ${short(lt.output)}`]
     if (lt.usd !== undefined) parts.push(`$${lt.usd.toFixed(2)}`)
     if (lt.share !== undefined) parts.push(`${Math.round(lt.share)}%`)
     lines.push({ label: 'Last req', pct: lt.share ?? 0, value: parts.join('  ') })
@@ -171,11 +172,12 @@ export const register: Register = on => {
 
   // A request = one main-loop turn. Its cost is the session cost's growth from
   // turn.start to turn.complete, subagents included; its tokens are the main
-  // loop's own API calls, summed (cache reads count as input).
+  // loop's own API calls; what it shows is how far it grew the context.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       const r = (await takeReading($)) ?? (await read($, reading))
       await update($, startUsd, () => r?.usd ?? null)
+      await update($, startTokens, () => r?.tokens ?? null)
     }
     return next(e)
   })
@@ -186,9 +188,11 @@ export const register: Register = on => {
     const u = e.usage
     const r = await takeReading($)
     const from = await read($, startUsd)
+    const fromTokens = await read($, startTokens)
     const usd = r?.usd !== undefined && from !== null ? Math.max(0, r.usd - from) : undefined
     const share = usd !== undefined && r?.usd ? (usd / r.usd) * 100 : undefined
     const lt: LastTurn = {
+      added: r && fromTokens !== null ? r.tokens - fromTokens : 0,
       input: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
       output: u.output_tokens,
       usd,
