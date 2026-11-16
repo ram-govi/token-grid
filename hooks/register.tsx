@@ -8,12 +8,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextUsage, SessionCost, SessionRateLimit } from 'claude-code'
 
-import type { LastTurn, Limit, Reading } from '../types'
+import type { LastTurn, Limit, Reading, SessionTime, TimeSpent } from '../types'
 
 const reading = atom({ plugin: 'token-grid', key: 'reading' } as const, null)
 const last = atom({ plugin: 'token-grid', key: 'last' } as const, null)
 const startUsd = atom({ plugin: 'token-grid', key: 'startUsd' } as const, null)
 const startTokens = atom({ plugin: 'token-grid', key: 'startTokens' } as const, null)
+const time = atom({ plugin: 'token-grid', key: 'time' } as const, null)
 
 const LINE_H = 20
 const BAR_H = 12
@@ -37,6 +38,16 @@ export const writeShareOf = (u: { input_tokens: number; output_tokens: number; c
   const write = 5 * u.output_tokens
   const read = u.input_tokens + 0.1 * u.cache_read_input_tokens + 1.25 * u.cache_creation_input_tokens
   return write + read > 0 ? write / (write + read) : undefined
+}
+
+const TIME = '#8f8cf4'
+
+export const duration = (ms: number): string => {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h limit', seven_day: '7d limit', spend_limit: 'Spend' }
@@ -64,9 +75,9 @@ export const resetIn = (iso: string | undefined, at: number): string => {
 
 type Part = { text: string; color?: string }
 // split: the share of the filled bar drawn in WRITE, the rest in READ.
-type Line = { label: string; pct: number; value: string; parts?: Part[]; split?: number }
+type Line = { label: string; pct: number; value: string; parts?: Part[]; split?: number; color?: string }
 
-export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Line[] => {
+export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null, ts: TimeSpent | null = null): Line[] => {
   const lines: Line[] = [
     {
       label: 'Context',
@@ -92,6 +103,14 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Lin
       split: lt.writeShare,
     })
   }
+  if (ts && ts.activeMs > 0) {
+    lines.push({
+      label: 'Time',
+      pct: (ts.lastMs / ts.activeMs) * 100,
+      value: `last ${duration(ts.lastMs)}  ·  total ${duration(ts.activeMs)}`,
+      color: TIME,
+    })
+  }
   for (const l of r.limits) {
     const reset = resetIn(l.resetsAt, at)
     lines.push({
@@ -104,7 +123,7 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Lin
 }
 
 const barSvg = (line: Line, y: number, barW: number, seed: number): string => {
-  const color = colorFor(line.pct)
+  const color = line.color ?? colorFor(line.pct)
   const raw = Math.round((barW * Math.max(0, Math.min(100, line.pct))) / 100)
   const fillW = line.split !== undefined && line.pct > 0 ? Math.max(raw, 4 * CELL) : raw
   const cols = Math.floor(fillW / CELL)
@@ -186,10 +205,39 @@ async function takeReading($: EngineInterface): Promise<Reading | null> {
   }
 }
 
+// Wall-clock time of each request (approval waits included), summed per
+// session and kept in $.store so a resumed session carries on its total.
+async function addTime($: EngineInterface, ms: number): Promise<void> {
+  if (!(ms > 0)) return
+  try {
+    const key = `time:${await $.session.id()}`
+    const now = await $.clock.now()
+    const saved = (await $.store.get(key)) as SessionTime | undefined
+    const next: SessionTime = {
+      root: saved?.root ?? (await $.session.root()),
+      firstAt: saved?.firstAt ?? now - ms,
+      lastAt: now,
+      lastMs: ms,
+      activeMs: (saved?.activeMs ?? 0) + ms,
+      turns: (saved?.turns ?? 0) + 1,
+    }
+    await $.store.set(key, next)
+    await update($, time, () => ({ lastMs: next.lastMs, activeMs: next.activeMs, turns: next.turns }))
+  } catch {
+    // Time stays as it was.
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await takeReading($)
+    try {
+      const saved = (await $.store.get(`time:${await $.session.id()}`)) as SessionTime | undefined
+      if (saved) await update($, time, () => ({ lastMs: saved.lastMs, activeMs: saved.activeMs, turns: saved.turns }))
+    } catch {
+      // No saved time; it starts at the first request.
+    }
     return result
   })
 
@@ -214,7 +262,9 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId !== undefined || !e.usage) return result
+    if (e.agentId !== undefined) return result
+    await addTime($, e.durationMs)
+    if (!e.usage) return result
     const u = e.usage
     const r = await takeReading($)
     const from = await read($, startUsd)
@@ -239,7 +289,7 @@ export const register: Register = on => {
 
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
-    const lines = linesOf(r, await $.clock.now(), await read($, last))
+    const lines = linesOf(r, await $.clock.now(), await read($, last), await read($, time))
 
     // The terminal's table lists Svg too, but its band refuses one: text there.
     if (e.surface !== 'terminal' && 'Svg' in ui) {
@@ -259,7 +309,7 @@ export const register: Register = on => {
               <Text dimColor>{l.label}</Text>
             </Box>
             {l.split === undefined ? (
-              <Text color={termColorFor(l.pct)}>{blocks(l.pct, barW)}</Text>
+              <Text color={l.color ?? termColorFor(l.pct)}>{blocks(l.pct, barW)}</Text>
             ) : (
               (() => {
                 const filled = l.pct > 0 ? Math.max(2, filledOf(l.pct, barW)) : 0

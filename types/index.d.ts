@@ -19,9 +19,17 @@ export type LastTurn = {
   /** Estimated part of the request's cost spent writing (output), 0-1; the rest is reading. */
   writeShare?: number
 }
+/** Time Claude spent working: the last request, and every request this session. */
+export type TimeSpent = {
+  lastMs: number
+  activeMs: number
+  turns: number
+}
+/** What $.store keeps per session (key `time:<sessionId>`), so a resume carries on. */
+export type SessionTime = TimeSpent & { root: string; firstAt: number; lastAt: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-grid': { reading: Reading | null; last: LastTurn | null; startUsd: number | null; startTokens: number | null }
+    'token-grid': { reading: Reading | null; last: LastTurn | null; startUsd: number | null; startTokens: number | null; time: TimeSpent | null }
   }
 }
