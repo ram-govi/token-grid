@@ -9,6 +9,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextUsage, SessionCost, SessionRateLimit } from 'claude-code'
 
 import type { LastTurn, Limit, Reading, SessionTime, TimeSpent } from '../types'
+import { addRequest, billingReport } from './billing'
 
 const reading = atom({ plugin: 'token-grid', key: 'reading' } as const, null)
 const last = atom({ plugin: 'token-grid', key: 'last' } as const, null)
@@ -207,20 +208,13 @@ async function takeReading($: EngineInterface): Promise<Reading | null> {
 
 // Wall-clock time of each request (approval waits included), summed per
 // session and kept in $.store so a resumed session carries on its total.
-async function addTime($: EngineInterface, ms: number): Promise<void> {
+async function addTime($: EngineInterface, ms: number, usd: number | undefined): Promise<void> {
   if (!(ms > 0)) return
   try {
     const key = `time:${await $.session.id()}`
     const now = await $.clock.now()
     const saved = (await $.store.get(key)) as SessionTime | undefined
-    const next: SessionTime = {
-      root: saved?.root ?? (await $.session.root()),
-      firstAt: saved?.firstAt ?? now - ms,
-      lastAt: now,
-      lastMs: ms,
-      activeMs: (saved?.activeMs ?? 0) + ms,
-      turns: (saved?.turns ?? 0) + 1,
-    }
+    const next = addRequest(saved, await $.session.root(), now, ms, usd)
     await $.store.set(key, next)
     await update($, time, () => ({ lastMs: next.lastMs, activeMs: next.activeMs, turns: next.turns }))
   } catch {
@@ -232,6 +226,16 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await takeReading($)
+    try {
+      await $.command.register({
+        name: 'billing',
+        description: 'Time and cost per project (token-grid)',
+        argumentHint: '[today|week|month|last-month|all|YYYY-MM] [project] [csv]',
+        immediate: true,
+      })
+    } catch {
+      // No command; the band still works.
+    }
     try {
       const saved = (await $.store.get(`time:${await $.session.id()}`)) as SessionTime | undefined
       if (saved) await update($, time, () => ({ lastMs: saved.lastMs, activeMs: saved.activeMs, turns: saved.turns }))
@@ -263,13 +267,13 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
-    await addTime($, e.durationMs)
-    if (!e.usage) return result
-    const u = e.usage
     const r = await takeReading($)
     const from = await read($, startUsd)
     const fromTokens = await read($, startTokens)
     const usd = r?.usd !== undefined && from !== null ? Math.max(0, r.usd - from) : undefined
+    await addTime($, e.durationMs, usd)
+    if (!e.usage) return result
+    const u = e.usage
     const share = usd !== undefined && r?.usd ? (usd / r.usd) * 100 : undefined
     const lt: LastTurn = {
       added: r && fromTokens !== null ? r.tokens - fromTokens : 0,
@@ -281,6 +285,16 @@ export const register: Register = on => {
     }
     await update($, last, () => lt)
     return result
+  })
+
+  on('command.run', { command: 'billing' }, async ($, e) => {
+    const keys = (await $.store.keys()).filter(k => k.startsWith('time:'))
+    const records: SessionTime[] = []
+    for (const k of keys) {
+      const v = (await $.store.get(k)) as SessionTime | undefined
+      if (v && typeof v.root === 'string') records.push(v)
+    }
+    return { text: billingReport(records, e.args, await $.clock.now()) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

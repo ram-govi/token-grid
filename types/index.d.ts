@@ -25,8 +25,10 @@ export type TimeSpent = {
   activeMs: number
   turns: number
 }
-/** What $.store keeps per session (key `time:<sessionId>`), so a resume carries on. */
-export type SessionTime = TimeSpent & { root: string; firstAt: number; lastAt: number }
+/** One local date's share of a session: time, cost and requests. */
+export type DayTotals = { ms: number; usd: number; turns: number }
+/** What $.store keeps per session (key `time:<sessionId>`), so a resume carries on and /billing can sum it. */
+export type SessionTime = TimeSpent & { root: string; firstAt: number; lastAt: number; days?: Record<string, DayTotals> }
 
 declare module 'claude-code' {
   interface PluginState {
