@@ -1,1 +1,7 @@
-{ "name": "token-grid", "version": "0.1.0", "description": "Dotted grid bars above the prompt for context fill and rate-limit windows", "types": "./types/index.d.ts", "license": "MIT" }
+{
+  "name": "token-grid",
+  "version": "0.2.0",
+  "description": "Dotted grid bars above the prompt for context fill, last request, cost and rate-limit windows",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}

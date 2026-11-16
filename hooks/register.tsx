@@ -8,15 +8,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextUsage, SessionCost, SessionRateLimit } from 'claude-code'
 
-import type { Limit, Reading } from '../types'
+import type { LastTurn, Limit, Reading } from '../types'
 
 const reading = atom({ plugin: 'token-grid', key: 'reading' } as const, null)
+const last = atom({ plugin: 'token-grid', key: 'last' } as const, null)
+const startUsd = atom({ plugin: 'token-grid', key: 'startUsd' } as const, null)
 
 const LINE_H = 20
 const BAR_H = 12
 const CELL = 3
 const LABEL_W = 64
-const VALUE_W = 150
+const VALUE_W = 190
 const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
 // Fill colour by how full the bar is.
@@ -49,7 +51,7 @@ export const resetIn = (iso: string | undefined, at: number): string => {
 
 type Line = { label: string; pct: number; value: string }
 
-export const linesOf = (r: Reading, at: number): Line[] => {
+export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Line[] => {
   const lines: Line[] = [
     {
       label: 'Context',
@@ -57,6 +59,12 @@ export const linesOf = (r: Reading, at: number): Line[] => {
       value: `${short(r.tokens)} / ${short(r.window)}  ${r.percent}%${r.usd !== undefined ? `  $${r.usd.toFixed(2)}` : ''}`,
     },
   ]
+  if (lt) {
+    const parts = [`in ${short(lt.input)} · out ${short(lt.output)}`]
+    if (lt.usd !== undefined) parts.push(`$${lt.usd.toFixed(2)}`)
+    if (lt.share !== undefined) parts.push(`${Math.round(lt.share)}%`)
+    lines.push({ label: 'Last req', pct: lt.share ?? 0, value: parts.join('  ') })
+  }
   for (const l of r.limits) {
     const reset = resetIn(l.resetsAt, at)
     lines.push({
@@ -135,13 +143,15 @@ const toReading = (context: SessionContextUsage, limits: readonly SessionRateLim
   }
 }
 
-async function takeReading($: EngineInterface): Promise<void> {
+async function takeReading($: EngineInterface): Promise<Reading | null> {
   try {
     const u = await $.session.usage()
     const r = toReading(u.context, u.rateLimits, u.cost)
     if (r) await update($, reading, () => r)
+    return r
   } catch {
     // No reading; the band keeps the last one.
+    return null
   }
 }
 
@@ -159,13 +169,42 @@ export const register: Register = on => {
     return result
   })
 
+  // A request = one main-loop turn. Its cost is the session cost's growth from
+  // turn.start to turn.complete, subagents included; its tokens are the main
+  // loop's own API calls, summed (cache reads count as input).
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const r = (await takeReading($)) ?? (await read($, reading))
+      await update($, startUsd, () => r?.usd ?? null)
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined || !e.usage) return result
+    const u = e.usage
+    const r = await takeReading($)
+    const from = await read($, startUsd)
+    const usd = r?.usd !== undefined && from !== null ? Math.max(0, r.usd - from) : undefined
+    const share = usd !== undefined && r?.usd ? (usd / r.usd) * 100 : undefined
+    const lt: LastTurn = {
+      input: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
+      output: u.output_tokens,
+      usd,
+      share,
+    }
+    await update($, last, () => lt)
+    return result
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const r = await read($, reading)
     if (r === null || e.props.hasSurvey) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
-    const lines = linesOf(r, await $.clock.now())
+    const lines = linesOf(r, await $.clock.now(), await read($, last))
 
     // The terminal's table lists Svg too, but its band refuses one: text there.
     if (e.surface !== 'terminal' && 'Svg' in ui) {
