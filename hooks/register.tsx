@@ -75,7 +75,7 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null): Lin
     },
   ]
   if (lt) {
-    const tail = [lt.usd !== undefined ? `$${lt.usd.toFixed(2)}` : '', lt.share !== undefined ? `${Math.round(lt.share)}%` : '']
+    const tail = [lt.usd !== undefined ? `$${lt.usd.toFixed(2)}` : '', lt.share !== undefined ? (lt.share > 0 && lt.share < 1 ? '<1%' : `${Math.round(lt.share)}%`) : '']
       .filter(Boolean)
       .join('  ')
     const parts: Part[] = [
@@ -133,7 +133,7 @@ const barSvg = (line: Line, y: number, barW: number, seed: number): string => {
 <rect class="k" width="${barW}" height="${BAR_H}" rx="${BAR_H / 2}"/>
 <g clip-path="url(#c${seed})"><g fill="${line.split === undefined ? color : READ}">${dots.join('')}</g><g fill="${WRITE}">${writeDots.join('')}</g><g class="tk">${ticks}</g></g>
 </g>
-<text class="t" x="${LABEL_W + barW + VALUE_W}" y="${y + LINE_H / 2 + 4}" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${line.parts ? line.parts.map(p => (p.color ? `<tspan fill="${p.color}">${xml(p.text)}</tspan>` : `<tspan xml:space="preserve">${xml(p.text)}</tspan>`)).join('') : xml(line.value)}</text>`
+<text class="t" xml:space="preserve" x="${LABEL_W + barW + VALUE_W}" y="${y + LINE_H / 2 + 4}" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${line.parts ? line.parts.map(p => (p.color ? `<tspan fill="${p.color}">${xml(p.text)}</tspan>` : `<tspan>${xml(p.text)}</tspan>`)).join('') : xml(line.value)}</text>`
 }
 
 export const gridSvg = (lines: Line[], W: number): string => {

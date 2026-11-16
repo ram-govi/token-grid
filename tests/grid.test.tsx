@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { writeShareOf } from '../hooks/register'
+import { gridSvg, linesOf, writeShareOf } from '../hooks/register'
 
 const BAND = {
   plugin: 'token-grid',
@@ -50,6 +50,18 @@ test('the last request shows its tokens, cost and share', async ($, on) => {
   const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await desk.find({ type: 'Svg' })).toBeDefined()
   await desk.unmount()
+})
+
+test('a share under 1% reads <1%, and the desktop keeps double spaces', async ($, on) => {
+  mock.clock(on)
+  const LAST = { added: 180, input: 152_000, output: 64, usd: 0.03, share: 0.3, writeShare: 0.02 }
+  on('state.get', (_$, e) => ({
+    value: { value: (e as { key: string }).key === 'last' ? LAST : READING, version: 1 },
+  }))
+  const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await term.find({ type: 'Text', text: /\$0\.03 {2}<1%/ })).toBeDefined()
+  await term.unmount()
+  expect(gridSvg(linesOf(READING, 0), 700)).toContain('xml:space="preserve"')
 })
 
 test('write share weighs output at 5x input and cache reads at a tenth', () => {
