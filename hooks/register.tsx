@@ -22,6 +22,8 @@ const BAR_H = 12
 const CELL = 3
 const LABEL_W = 64
 const VALUE_W = 190
+// Right-hand time column: session total on Context, the request's own on Last req.
+const ASIDE_W = 84
 const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
 // Fill colour by how full the bar is.
@@ -76,7 +78,7 @@ export const resetIn = (iso: string | undefined, at: number): string => {
 
 type Part = { text: string; color?: string }
 // split: the share of the filled bar drawn in WRITE, the rest in READ.
-type Line = { label: string; pct: number; value: string; parts?: Part[]; split?: number; color?: string }
+type Line = { label: string; pct: number; value: string; parts?: Part[]; split?: number; color?: string; aside?: string }
 
 export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null, ts: TimeSpent | null = null): Line[] => {
   const lines: Line[] = [
@@ -105,12 +107,8 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null, ts: 
     })
   }
   if (ts && ts.activeMs > 0) {
-    lines.push({
-      label: 'Time',
-      pct: (ts.lastMs / ts.activeMs) * 100,
-      value: `last ${duration(ts.lastMs)}  ·  total ${duration(ts.activeMs)}`,
-      color: TIME,
-    })
+    lines[0].aside = `⏱ ${duration(ts.activeMs)}`
+    if (lines[1]?.label === 'Last req') lines[1].aside = `⏱ ${duration(ts.lastMs)}`
   }
   for (const l of r.limits) {
     const reset = resetIn(l.resetsAt, at)
@@ -123,7 +121,7 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null, ts: 
   return lines
 }
 
-const barSvg = (line: Line, y: number, barW: number, seed: number): string => {
+const barSvg = (line: Line, y: number, barW: number, seed: number, asideW: number): string => {
   const color = line.color ?? colorFor(line.pct)
   const raw = Math.round((barW * Math.max(0, Math.min(100, line.pct))) / 100)
   const fillW = line.split !== undefined && line.pct > 0 ? Math.max(raw, 4 * CELL) : raw
@@ -153,11 +151,16 @@ const barSvg = (line: Line, y: number, barW: number, seed: number): string => {
 <rect class="k" width="${barW}" height="${BAR_H}" rx="${BAR_H / 2}"/>
 <g clip-path="url(#c${seed})"><g fill="${line.split === undefined ? color : READ}">${dots.join('')}</g><g fill="${WRITE}">${writeDots.join('')}</g><g class="tk">${ticks}</g></g>
 </g>
-<text class="t" xml:space="preserve" x="${LABEL_W + barW + VALUE_W}" y="${y + LINE_H / 2 + 4}" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${line.parts ? line.parts.map(p => (p.color ? `<tspan fill="${p.color}">${xml(p.text)}</tspan>` : `<tspan>${xml(p.text)}</tspan>`)).join('') : xml(line.value)}</text>`
+<text class="t" xml:space="preserve" x="${LABEL_W + barW + VALUE_W}" y="${y + LINE_H / 2 + 4}" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${line.parts ? line.parts.map(p => (p.color ? `<tspan fill="${p.color}">${xml(p.text)}</tspan>` : `<tspan>${xml(p.text)}</tspan>`)).join('') : xml(line.value)}</text>${
+    line.aside
+      ? `\n<text x="${LABEL_W + barW + VALUE_W + asideW}" y="${y + LINE_H / 2 + 4}" text-anchor="end" fill="${TIME}" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${xml(line.aside)}</text>`
+      : ''
+  }`
 }
 
 export const gridSvg = (lines: Line[], W: number): string => {
-  const barW = Math.max(60, W - LABEL_W - VALUE_W - 8)
+  const asideW = lines.some(l => l.aside) ? ASIDE_W : 0
+  const barW = Math.max(60, W - LABEL_W - VALUE_W - asideW - 8)
   const H = lines.length * LINE_H
   const clips = lines
     .map((_, i) => `<clipPath id="c${i * 17}"><rect width="${barW}" height="${BAR_H}" rx="${BAR_H / 2}"/></clipPath>`)
@@ -172,7 +175,7 @@ export const gridSvg = (lines: Line[], W: number): string => {
 @media (prefers-reduced-motion: reduce){.t0,.t1,.t2,.t3{animation:none}}
 </style>
 <defs>${clips}</defs>
-${lines.map((l, i) => barSvg(l, i * LINE_H, barW, i * 17)).join('\n')}
+${lines.map((l, i) => barSvg(l, i * LINE_H, barW, i * 17, asideW)).join('\n')}
 </svg>`
 }
 
@@ -308,7 +311,7 @@ export const register: Register = on => {
     // The terminal's table lists Svg too, but its band refuses one: text there.
     if (e.surface !== 'terminal' && 'Svg' in ui) {
       const { Svg } = ui
-      const width = Math.max(260, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 40))
+      const width = Math.max(260, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 40 + (lines.some(l => l.aside) ? ASIDE_W : 0)))
       const alt = lines.map(l => `${l.label} ${l.value}`).join('; ')
       return <Svg source={gridSvg(lines, width)} alt={alt} width={width} height={lines.length * LINE_H} />
     }
@@ -348,6 +351,7 @@ export const register: Register = on => {
             ) : (
               <Text>{l.value}</Text>
             )}
+            {l.aside ? <Text color={TIME}>{l.aside}</Text> : null}
           </Box>
         ))}
       </Box>

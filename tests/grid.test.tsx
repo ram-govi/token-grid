@@ -64,12 +64,15 @@ test('a share under 1% reads <1%, and the desktop keeps double spaces', async ($
   expect(gridSvg(linesOf(READING, 0), 700)).toContain('xml:space="preserve"')
 })
 
-test('time shows the last request and the session total', () => {
-  const lines = linesOf(READING, 0, null, { lastMs: 134_000, activeMs: 4_320_000, turns: 9 })
-  const t = lines.find(l => l.label === 'Time')
-  expect(t?.value).toBe('last 2m 14s  ·  total 1h 12m')
+test('time sits on the right: session total on Context, the request on Last req', () => {
+  const LAST = { added: 1, input: 1, output: 1, usd: 0.1, share: 5, writeShare: 0.1 }
+  const lines = linesOf(READING, 0, LAST, { lastMs: 134_000, activeMs: 4_320_000, turns: 9 })
+  expect(lines.map(l => l.label)).not.toContain('Time')
+  expect(lines[0].aside).toBe('⏱ 1h 12m')
+  expect(lines[1].aside).toBe('⏱ 2m 14s')
+  expect(gridSvg(lines, 700)).toContain('⏱ 2m 14s')
   expect(duration(42_000)).toBe('42s')
-  expect(linesOf(READING, 0, null, null).some(l => l.label === 'Time')).toBe(false)
+  expect(linesOf(READING, 0, null, null).some(l => l.aside)).toBe(false)
 })
 
 test('write share weighs output at 5x input and cache reads at a tenth', () => {
