@@ -35,6 +35,14 @@ const termColorFor = (pct: number): string => (pct < 50 ? 'green' : pct < 75 ? '
 const READ = '#5b9cf0'
 const WRITE = '#e8913a'
 
+// Last req $ and %: quiet for a usual request, amber at 2x the session's
+// average, red at 4x. The raw share falls as a session grows, so it can't be
+// coloured by value.
+const OUTLIER_AMBER = '#e0a040'
+const OUTLIER_RED = '#e05a4f'
+export const outlierColor = (vsAvg: number | undefined): string | undefined =>
+  vsAvg === undefined ? undefined : vsAvg >= 4 ? OUTLIER_RED : vsAvg >= 2 ? OUTLIER_AMBER : undefined
+
 // Relative price per token, the same ratio on every Claude model: input 1,
 // cache read 0.1, cache write 1.25, output 5. Only the ratio matters here.
 export const writeShareOf = (u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number | undefined => {
@@ -96,7 +104,7 @@ export const linesOf = (r: Reading, at: number, lt: LastTurn | null = null, ts: 
       { text: `${lt.added < 0 ? '−' : '+'}${short(Math.abs(lt.added))} ctx`, color: READ },
       { text: ' · ' },
       { text: `out ${short(lt.output)}`, color: WRITE },
-      ...(tail ? [{ text: `  ${tail}` }] : []),
+      ...(tail ? [{ text: '  ' }, { text: tail, color: outlierColor(lt.vsAvg) }] : []),
     ]
     lines.push({
       label: 'Last req',
@@ -278,12 +286,17 @@ export const register: Register = on => {
     if (!e.usage) return result
     const u = e.usage
     const share = usd !== undefined && r?.usd ? (usd / r.usd) * 100 : undefined
+    // Average of the earlier requests; needs two of them before it means anything.
+    const turns = (await read($, time))?.turns ?? 0
+    const prior = usd !== undefined && r?.usd !== undefined && turns >= 3 ? (r.usd - usd) / (turns - 1) : 0
+    const vsAvg = usd !== undefined && prior > 0.005 ? usd / prior : undefined
     const lt: LastTurn = {
       added: r && fromTokens !== null ? r.tokens - fromTokens : 0,
       input: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
       output: u.output_tokens,
       usd,
       share,
+      vsAvg,
       writeShare: writeShareOf(u),
     }
     await update($, last, () => lt)

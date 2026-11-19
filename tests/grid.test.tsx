@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { duration, gridSvg, linesOf, writeShareOf } from '../hooks/register'
+import { duration, gridSvg, linesOf, outlierColor, writeShareOf } from '../hooks/register'
 
 const BAND = {
   plugin: 'token-grid',
@@ -73,6 +73,19 @@ test('time sits on the right: session total on Context, the request on Last req'
   expect(gridSvg(lines, 700)).toContain('⏱ 2m 14s')
   expect(duration(42_000)).toBe('42s')
   expect(linesOf(READING, 0, null, null).some(l => l.aside)).toBe(false)
+})
+
+test('cost colour flags a request well above the session average', () => {
+  expect(outlierColor(undefined)).toBeUndefined()
+  expect(outlierColor(1.9)).toBeUndefined()
+  expect(outlierColor(2)).toBe('#e0a040')
+  expect(outlierColor(4.5)).toBe('#e05a4f')
+  const LAST = { added: 1, input: 1, output: 1, usd: 1.2, share: 30, vsAvg: 5, writeShare: 0.1 }
+  const line = linesOf(READING, 0, LAST)[1]
+  expect(line.parts?.find(p => p.text === '$1.20  30%')?.color).toBe('#e05a4f')
+  expect(gridSvg([line], 700)).toContain('<tspan fill="#e05a4f">$1.20  30%</tspan>')
+  const quiet = linesOf(READING, 0, { ...LAST, vsAvg: 1 })[1]
+  expect(quiet.parts?.find(p => p.text === '$1.20  30%')?.color).toBeUndefined()
 })
 
 test('write share weighs output at 5x input and cache reads at a tenth', () => {
